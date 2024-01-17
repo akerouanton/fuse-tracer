@@ -5,6 +5,7 @@ go 1.21.5
 require (
 	github.com/aybabtme/uniplot v0.0.0-20151203143629-039c559e5e7e
 	github.com/cilium/ebpf v0.12.3
+	github.com/fatih/structs v1.1.0
 	github.com/sirupsen/logrus v1.9.3
 )
 

@@ -18,6 +18,7 @@ import (
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
 	"github.com/cilium/ebpf/rlimit"
+	"github.com/fatih/structs"
 	"github.com/sirupsen/logrus"
 )
 
@@ -26,6 +27,7 @@ var hexFlag = flag.Bool("hex", false, "Show args in hex format")
 var statsFlag = flag.Bool("stats", false, "Show requests / replies stats")
 var histFlag = flag.Bool("hist", false, "Show histogram of request time")
 var stacktraceFlag = flag.Bool("stacktrace", false, "Dump kernel stacktraces")
+var connStateFlag = flag.Bool("conn-state", false, "Show fuse conn state")
 
 type fuseOpStats struct {
 	Count     int
@@ -106,6 +108,9 @@ func main() {
 	}
 	if *histFlag {
 		printOpsHist()
+	}
+	if *connStateFlag {
+		printConnStateFlag(coll.Maps["fc_state_map"])
 	}
 
 	for _, l := range attached {
@@ -215,4 +220,18 @@ func fuseEvent(fuseEvt fuse_tracerFuseReqEvt) string {
 	}
 
 	return b.String()
+}
+
+func printConnStateFlag(m *ebpf.Map) {
+	var mapID uint32
+	var connState fuse_tracerFuseConnState
+
+	if err := m.Lookup(&mapID, &connState); err != nil {
+		panic(err)
+	}
+
+	fmt.Print("\nFUSE conn state:\n")
+	for _, field := range structs.New(connState).Fields() {
+		fmt.Printf("    - %s: %d\n", field.Name(), field.Value())
+	}
 }

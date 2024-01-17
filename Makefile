@@ -3,7 +3,7 @@ generate:
 	go generate ./
 
 .PHONY: build
-build: generate
+build:
 	docker build -t albinkerouanton006/fuse-tracer:latest .
 
 .PHONY: push

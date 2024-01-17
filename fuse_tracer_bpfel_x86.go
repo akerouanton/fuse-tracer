@@ -12,6 +12,64 @@ import (
 	"github.com/cilium/ebpf"
 )
 
+type fuse_tracerFuseConnState struct {
+	ConnError          uint64
+	ConnInit           uint64
+	AsyncRead          uint64
+	AbortErr           uint64
+	AtomicO_trunc      uint64
+	ExportSupport      uint64
+	WritebackCache     uint64
+	ParallelDirops     uint64
+	HandleKillpriv     uint64
+	CacheSymlinks      uint64
+	LegacyOptsShow     uint64
+	HandleKillprivV2   uint64
+	NoOpen             uint64
+	NoOpendir          uint64
+	NoFsync            uint64
+	NoFsyncdir         uint64
+	NoFlush            uint64
+	NoSetxattr         uint64
+	SetxattrExt        uint64
+	NoGetxattr         uint64
+	NoListxattr        uint64
+	NoRemovexattr      uint64
+	NoLock             uint64
+	NoAccess           uint64
+	NoCreate           uint64
+	NoInterrupt        uint64
+	NoBmap             uint64
+	NoPoll             uint64
+	BigWrites          uint64
+	DontMask           uint64
+	NoFlock            uint64
+	NoFallocate        uint64
+	NoRename2          uint64
+	AutoInvalData      uint64
+	ExplicitInvalData  uint64
+	DoReaddirplus      uint64
+	ReaddirplusAuto    uint64
+	AsyncDio           uint64
+	NoLseek            uint64
+	PosixAcl           uint64
+	DefaultPermissions uint64
+	AllowOther         uint64
+	NoCopyFileRange    uint64
+	Destroy            uint64
+	DeleteStale        uint64
+	NoControl          uint64
+	NoForceUmount      uint64
+	AutoSubmounts      uint64
+	SyncFs             uint64
+	InitSecurity       uint64
+	CreateSuppGroup    uint64
+	InodeDax           uint64
+	NoTmpfile          uint64
+	DirectIoAllowMmap  uint64
+	NoStatx            uint64
+}
+
 type fuse_tracerFuseReqEvt struct {
 	StartKtime uint64
 	EndKtime   uint64
@@ -91,6 +149,7 @@ type fuse_tracerProgramSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type fuse_tracerMapSpecs struct {
+	FcStateMap    *ebpf.MapSpec `ebpf:"fc_state_map"`
 	FuseReqEvents *ebpf.MapSpec `ebpf:"fuse_req_events"`
 	InflightReqs  *ebpf.MapSpec `ebpf:"inflight_reqs"`
 	ReqHeap       *ebpf.MapSpec `ebpf:"req_heap"`
@@ -115,6 +174,7 @@ func (o *fuse_tracerObjects) Close() error {
 //
 // It can be passed to loadFuse_tracerObjects or ebpf.CollectionSpec.LoadAndAssign.
 type fuse_tracerMaps struct {
+	FcStateMap    *ebpf.Map `ebpf:"fc_state_map"`
 	FuseReqEvents *ebpf.Map `ebpf:"fuse_req_events"`
 	InflightReqs  *ebpf.Map `ebpf:"inflight_reqs"`
 	ReqHeap       *ebpf.Map `ebpf:"req_heap"`
@@ -122,6 +182,7 @@ type fuse_tracerMaps struct {
 
 func (m *fuse_tracerMaps) Close() error {
 	return _Fuse_tracerClose(
+		m.FcStateMap,
 		m.FuseReqEvents,
 		m.InflightReqs,
 		m.ReqHeap,

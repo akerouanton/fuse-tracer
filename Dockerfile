@@ -13,4 +13,4 @@ RUN go generate ./
 COPY . .
 RUN CGO_ENABLED=0 go build -o /usr/bin/fuse_tracer -ldflags="-extldflags=-static"
 
-CMD ["/usr/bin/fuse_tracer", "-dump", "-hex", "-stats", "-hist"]
+CMD ["/usr/bin/fuse_tracer", "-dump", "-hex", "-stats", "-hist", "-conn-state"]

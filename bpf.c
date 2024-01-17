@@ -158,6 +158,8 @@ int BPF_PROG(trace_fuse_request, struct fuse_iqueue *fiq, struct fuse_req *req) 
     return 0;
 }
 
+static void trace_conn(struct fuse_conn *fc);
+
 // fuse_simple_request -> __fuse_request_send -> request_wait_answer
 SEC("fentry/request_wait_answer")
 int BPF_PROG(trace_request_wait_answer, struct fuse_req *req) {
@@ -182,9 +184,161 @@ int BPF_PROG(trace_request_wait_answer, struct fuse_req *req) {
 
     bpf_ringbuf_output(&fuse_req_events, evt, sizeof(struct fuse_req_evt), 0);
 
+    struct fuse_conn *fc = BPF_CORE_READ(req, fm, fc);
+    trace_conn(fc);
+
     return 0;
 }
 
 // fuse_dev_read | fuse_dev_splice_read -> fuse_dev_do_read -> fuse_request_end
 // fuse_dev_write | fuse_dev_splice_write -> fuse_dev_do_write -> fuse_request_end
 // end_requests -> fuse_request_end
+
+struct fuse_conn_state {
+    u16 max_read;
+	u16 max_write;
+	u16 max_pages;
+	u16 max_pages_limit;
+	u16 max_background;
+	u16 congestion_threshold;
+	u16 num_background;
+	u16 active_background;
+	u64 conn_error;
+	u64 conn_init;
+	u64 async_read;
+	u64 abort_err;
+	u64 atomic_o_trunc;
+	u64 export_support;
+	u64 writeback_cache;
+	u64 parallel_dirops;
+	u64 handle_killpriv;
+	u64 cache_symlinks;
+	u64 legacy_opts_show;
+	u64 handle_killpriv_v2;
+	u64 no_open;
+	u64 no_opendir;
+	u64 no_fsync;
+	u64 no_fsyncdir;
+	u64 no_flush;
+	u64 no_setxattr;
+	u64 setxattr_ext;
+	u64 no_getxattr;
+	u64 no_listxattr;
+	u64 no_removexattr;
+	u64 no_lock;
+	u64 no_access;
+	u64 no_create;
+	u64 no_interrupt;
+	u64 no_bmap;
+	u64 no_poll;
+	u64 big_writes;
+	u64 dont_mask;
+	u64 no_flock;
+	u64 no_fallocate;
+	u64 no_rename2;
+	u64 auto_inval_data;
+	u64 explicit_inval_data;
+	u64 do_readdirplus;
+	u64 readdirplus_auto;
+	u64 async_dio;
+	u64 no_lseek;
+	u64 posix_acl;
+	u64 default_permissions;
+	u64 allow_other;
+	u64 no_copy_file_range;
+	u64 destroy;
+	u64 delete_stale;
+	u64 no_control;
+	u64 no_force_umount;
+	u64 auto_submounts;
+	u64 sync_fs;
+	u64 init_security;
+	u64 create_supp_group;
+	u64 inode_dax;
+	u64 no_tmpfile;
+	u64 direct_io_allow_mmap;
+	u64 no_statx;
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __type(key, u32);
+    __type(value, struct fuse_conn_state);
+    __uint(max_entries, 1);
+} fc_state_map SEC(".maps");
+
+static void trace_conn(struct fuse_conn *fc) {
+    u32 map_id = 0;
+    struct fuse_conn_state *fc_state = bpf_map_lookup_elem(&fc_state_map, &map_id);
+    if (fc_state == NULL) {
+        return;
+    }
+
+    fc_state->max_read = BPF_CORE_READ(fc, max_read);
+	fc_state->max_write = BPF_CORE_READ(fc, max_write);
+	fc_state->max_pages = BPF_CORE_READ(fc, max_pages);
+	fc_state->max_pages_limit = BPF_CORE_READ(fc, max_pages_limit);
+	fc_state->max_background = BPF_CORE_READ(fc, max_background);
+	fc_state->congestion_threshold = BPF_CORE_READ(fc, congestion_threshold);
+	fc_state->num_background = BPF_CORE_READ(fc, num_background);
+	fc_state->active_background = BPF_CORE_READ(fc, active_background);
+	fc_state->conn_error = BPF_CORE_READ_BITFIELD_PROBED(fc, conn_error);
+	fc_state->conn_init = BPF_CORE_READ_BITFIELD_PROBED(fc, conn_init);
+	fc_state->async_read = BPF_CORE_READ_BITFIELD_PROBED(fc, async_read);
+	fc_state->abort_err = BPF_CORE_READ_BITFIELD_PROBED(fc, abort_err);
+	fc_state->atomic_o_trunc = BPF_CORE_READ_BITFIELD_PROBED(fc, atomic_o_trunc);
+	fc_state->export_support = BPF_CORE_READ_BITFIELD_PROBED(fc, export_support);
+	fc_state->writeback_cache = BPF_CORE_READ_BITFIELD_PROBED(fc, writeback_cache);
+	fc_state->parallel_dirops = BPF_CORE_READ_BITFIELD_PROBED(fc, parallel_dirops);
+	fc_state->handle_killpriv = BPF_CORE_READ_BITFIELD_PROBED(fc, handle_killpriv);
+	fc_state->cache_symlinks = BPF_CORE_READ_BITFIELD_PROBED(fc, cache_symlinks);
+	fc_state->legacy_opts_show = BPF_CORE_READ_BITFIELD_PROBED(fc, legacy_opts_show);
+	fc_state->handle_killpriv_v2 = BPF_CORE_READ_BITFIELD_PROBED(fc, handle_killpriv_v2);
+	fc_state->no_open = BPF_CORE_READ_BITFIELD_PROBED(fc, no_open);
+	fc_state->no_opendir = BPF_CORE_READ_BITFIELD_PROBED(fc, no_opendir);
+	fc_state->no_fsync = BPF_CORE_READ_BITFIELD_PROBED(fc, no_fsync);
+	fc_state->no_fsyncdir = BPF_CORE_READ_BITFIELD_PROBED(fc, no_fsyncdir);
+	fc_state->no_flush = BPF_CORE_READ_BITFIELD_PROBED(fc, no_flush);
+	fc_state->no_setxattr = BPF_CORE_READ_BITFIELD_PROBED(fc, no_setxattr);
+	fc_state->setxattr_ext = BPF_CORE_READ_BITFIELD_PROBED(fc, setxattr_ext);
+	fc_state->no_getxattr = BPF_CORE_READ_BITFIELD_PROBED(fc, no_getxattr);
+	fc_state->no_listxattr = BPF_CORE_READ_BITFIELD_PROBED(fc, no_listxattr);
+	fc_state->no_removexattr = BPF_CORE_READ_BITFIELD_PROBED(fc, no_removexattr);
+	fc_state->no_lock = BPF_CORE_READ_BITFIELD_PROBED(fc, no_lock);
+	fc_state->no_access = BPF_CORE_READ_BITFIELD_PROBED(fc, no_access);
+	fc_state->no_create = BPF_CORE_READ_BITFIELD_PROBED(fc, no_create);
+	fc_state->no_interrupt = BPF_CORE_READ_BITFIELD_PROBED(fc, no_interrupt);
+	fc_state->no_bmap = BPF_CORE_READ_BITFIELD_PROBED(fc, no_bmap);
+	fc_state->no_poll = BPF_CORE_READ_BITFIELD_PROBED(fc, no_poll);
+	fc_state->big_writes = BPF_CORE_READ_BITFIELD_PROBED(fc, big_writes);
+	fc_state->dont_mask = BPF_CORE_READ_BITFIELD_PROBED(fc, dont_mask);
+	fc_state->no_flock = BPF_CORE_READ_BITFIELD_PROBED(fc, no_flock);
+	fc_state->no_fallocate = BPF_CORE_READ_BITFIELD_PROBED(fc, no_fallocate);
+	fc_state->no_rename2 = BPF_CORE_READ_BITFIELD_PROBED(fc, no_rename2);
+	fc_state->auto_inval_data = BPF_CORE_READ_BITFIELD_PROBED(fc, auto_inval_data);
+	fc_state->explicit_inval_data = BPF_CORE_READ_BITFIELD_PROBED(fc, explicit_inval_data);
+	fc_state->do_readdirplus = BPF_CORE_READ_BITFIELD_PROBED(fc, do_readdirplus);
+	fc_state->readdirplus_auto = BPF_CORE_READ_BITFIELD_PROBED(fc, readdirplus_auto);
+	fc_state->async_dio = BPF_CORE_READ_BITFIELD_PROBED(fc, async_dio);
+	fc_state->no_lseek = BPF_CORE_READ_BITFIELD_PROBED(fc, no_lseek);
+	fc_state->posix_acl = BPF_CORE_READ_BITFIELD_PROBED(fc, posix_acl);
+	fc_state->default_permissions = BPF_CORE_READ_BITFIELD_PROBED(fc, default_permissions);
+	fc_state->allow_other = BPF_CORE_READ_BITFIELD_PROBED(fc, allow_other);
+	fc_state->no_copy_file_range = BPF_CORE_READ_BITFIELD_PROBED(fc, no_copy_file_range);
+	fc_state->destroy = BPF_CORE_READ_BITFIELD_PROBED(fc, destroy);
+	fc_state->delete_stale = BPF_CORE_READ_BITFIELD_PROBED(fc, delete_stale);
+	fc_state->no_control = BPF_CORE_READ_BITFIELD_PROBED(fc, no_control);
+	fc_state->no_force_umount = BPF_CORE_READ_BITFIELD_PROBED(fc, no_force_umount);
+	fc_state->auto_submounts = BPF_CORE_READ_BITFIELD_PROBED(fc, auto_submounts);
+	fc_state->sync_fs = BPF_CORE_READ_BITFIELD_PROBED(fc, sync_fs);
+	fc_state->init_security = BPF_CORE_READ_BITFIELD_PROBED(fc, init_security);
+	fc_state->create_supp_group = BPF_CORE_READ_BITFIELD_PROBED(fc, create_supp_group);
+	fc_state->inode_dax = BPF_CORE_READ_BITFIELD_PROBED(fc, inode_dax);
+	fc_state->no_tmpfile = BPF_CORE_READ_BITFIELD_PROBED(fc, no_tmpfile);
+	fc_state->direct_io_allow_mmap = BPF_CORE_READ_BITFIELD_PROBED(fc, direct_io_allow_mmap);
+	fc_state->no_statx = BPF_CORE_READ_BITFIELD_PROBED(fc, no_statx);
+
+	if (bpf_map_update_elem(&fc_state_map, &map_id, fc_state, 0) < 0) {
+		bpf_printk("couldn't update fc_state_map.");
+	}
+}
