@@ -8,6 +8,7 @@
 
 char LICENSE[] SEC("license") = "GPL";
 
+#define TRACE_FUSE_CONN_STATE 1
 #define FUSE_ARG_SZ 128
 
 struct _fuse_arg {
@@ -81,7 +82,6 @@ static int read_fuse_in_args(struct fuse_req_evt *evt, struct fuse_args *args) {
     for (int i = 0; i < 3 && i < evt->in_numargs; i++) {
         if (read_fuse_in_arg(&evt->in_args[i], args, i) < 0) {
             bpf_printk("couldn't read fuse in_arg%d", i);
-            return -1;
         }
     }
 
@@ -121,7 +121,6 @@ static int read_fuse_out_args(struct fuse_req_evt *evt, struct fuse_args *args) 
     for (int i = 0; i < 3 && i < evt->out_numargs; i++) {
         if (read_fuse_out_arg(&evt->out_args[i], args, i) < 0) {
             bpf_printk("couldn't read fuse out_arg%d", i);
-            return -1;
         }
     }
 
@@ -155,6 +154,7 @@ int BPF_PROG(trace_fuse_request, struct fuse_iqueue *fiq, struct fuse_req *req) 
     
     u64 req_id = evt->in_h.unique;
     bpf_map_update_elem(&inflight_reqs, &req_id, evt, 0);
+
     return 0;
 }
 
@@ -178,14 +178,43 @@ int BPF_PROG(trace_request_wait_answer, struct fuse_req *req) {
     evt->end_flags = BPF_CORE_READ(req, flags);
     
     struct fuse_args *args = BPF_CORE_READ(req, args);
-    if (read_fuse_out_args(evt, args) < 0) {
-        return 0;
-    }
+    read_fuse_out_args(evt, args);
 
     bpf_ringbuf_output(&fuse_req_events, evt, sizeof(struct fuse_req_evt), 0);
 
+#if TRACE_FUSE_CONN_STATE
     struct fuse_conn *fc = BPF_CORE_READ(req, fm, fc);
     trace_conn(fc);
+#endif
+
+    return 0;
+}
+
+SEC("fentry/fuse_request_end")
+int BPF_PROG(trace_fuse_request_end, struct fuse_req *req) {
+    u64 req_id = BPF_CORE_READ(req, in.h.unique);
+    if (req_id == 0) {
+        return 0;
+    }
+
+    struct fuse_req_evt *evt = bpf_map_lookup_elem(&inflight_reqs, &req_id);
+    if (evt == NULL) {
+        bpf_printk("couldn't find key %d in inflight_reqs", req_id);
+        return 0;
+    }
+
+    evt->end_ktime = bpf_ktime_get_ns();
+    evt->end_flags = BPF_CORE_READ(req, flags);
+    
+    struct fuse_args *args = BPF_CORE_READ(req, args);
+    read_fuse_out_args(evt, args);
+
+    bpf_ringbuf_output(&fuse_req_events, evt, sizeof(struct fuse_req_evt), 0);
+
+#if TRACE_FUSE_CONN_STATE
+    struct fuse_conn *fc = BPF_CORE_READ(req, fm, fc);
+    trace_conn(fc);
+#endif
 
     return 0;
 }
@@ -282,7 +311,15 @@ static void trace_conn(struct fuse_conn *fc) {
 	fc_state->congestion_threshold = BPF_CORE_READ(fc, congestion_threshold);
 	fc_state->num_background = BPF_CORE_READ(fc, num_background);
 	fc_state->active_background = BPF_CORE_READ(fc, active_background);
-	fc_state->conn_error = BPF_CORE_READ_BITFIELD_PROBED(fc, conn_error);
+
+    u8 state[8];
+    if (bpf_probe_read_kernel(&state, 8, &fc->aborted) < 0) {
+        bpf_printk("couldn't read conn_error");
+        return;
+    }
+    // bpf_printk("state: %x %x %x %x %x %x %x %x", state[0], state[1], state[2], state[3], state[4], state[5], state[6], state[7]);
+    bpf_printk("state: %x", state);
+	/* fc_state->conn_error = BPF_CORE_READ_BITFIELD_PROBED(fc, conn_error);
 	fc_state->conn_init = BPF_CORE_READ_BITFIELD_PROBED(fc, conn_init);
 	fc_state->async_read = BPF_CORE_READ_BITFIELD_PROBED(fc, async_read);
 	fc_state->abort_err = BPF_CORE_READ_BITFIELD_PROBED(fc, abort_err);
@@ -336,7 +373,7 @@ static void trace_conn(struct fuse_conn *fc) {
 	fc_state->inode_dax = BPF_CORE_READ_BITFIELD_PROBED(fc, inode_dax);
 	fc_state->no_tmpfile = BPF_CORE_READ_BITFIELD_PROBED(fc, no_tmpfile);
 	fc_state->direct_io_allow_mmap = BPF_CORE_READ_BITFIELD_PROBED(fc, direct_io_allow_mmap);
-	fc_state->no_statx = BPF_CORE_READ_BITFIELD_PROBED(fc, no_statx);
+	fc_state->no_statx = BPF_CORE_READ_BITFIELD_PROBED(fc, no_statx); */
 
 	if (bpf_map_update_elem(&fc_state_map, &map_id, fc_state, 0) < 0) {
 		bpf_printk("couldn't update fc_state_map.");

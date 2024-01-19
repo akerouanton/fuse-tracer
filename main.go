@@ -194,7 +194,7 @@ func fuseEvent(fuseEvt fuse_tracerFuseReqEvt) string {
 		float64(fuseEvt.EndKtime-fuseEvt.StartKtime)/1e3)
 
 	if fuseEvt.InNumargs == 0 {
-		fmt.Fprint(b, "    - (no in args)")
+		fmt.Fprint(b, "    - (no in args)\n")
 	}
 
 	for i := 0; i < int(fuseEvt.InNumargs); i++ {
@@ -207,7 +207,7 @@ func fuseEvent(fuseEvt fuse_tracerFuseReqEvt) string {
 	}
 
 	if fuseEvt.OutNumargs == 0 {
-		fmt.Fprint(b, "    - (no out args)")
+		fmt.Fprint(b, "    - (no out args)\n")
 	}
 
 	for i := 0; i < int(fuseEvt.OutNumargs); i++ {

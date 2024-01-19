@@ -11,7 +11,7 @@ push: build
 	docker push albinkerouanton006/fuse-tracer:latest
 
 .PHONY: run
-run:
+run: build
 	docker run --rm -it --privileged albinkerouanton006/fuse-tracer:latest
 
 vmlinux.h:
