@@ -103,6 +103,6 @@ func fuseOperation(opcode uint32) string {
 	case 51:
 		return "FUSE_TMPFILE"
 	default:
-		panic(fmt.Sprintf("unknown opcode %d", opcode))
+		return fmt.Sprintf("unknown opcode %d", opcode)
 	}
 }

@@ -1,18 +1,28 @@
+BIN ?= fuse-tracer
+
+.PHONY: dev
+dev:
+	docker build -t albinkerouanton006/fuse-tracer:dev --target dev .
+
 .PHONY: generate
-generate:
-	go generate ./
+generate: dev
+	docker run --rm -v .:/src -e GOARCH=amd64 albinkerouanton006/fuse-tracer:dev go generate ./bpf
+	docker run --rm -v .:/src -e GOARCH=arm64 albinkerouanton006/fuse-tracer:dev go generate ./bpf
 
 .PHONY: build
-build:
-	docker build -t albinkerouanton006/fuse-tracer:latest .
+build: generate
+	docker build -t albinkerouanton006/fuse-tracer:latest --target bin .
 
 .PHONY: push
 push: build
 	docker push albinkerouanton006/fuse-tracer:latest
 
 .PHONY: run
-run: build
-	docker run --rm -it --privileged albinkerouanton006/fuse-tracer:latest
+run:
+ifeq ($(ARGS),)
+	@echo "WARNING: no ARGS specified."
+endif
+	docker run --rm -it --privileged albinkerouanton006/fuse-tracer:latest $(BIN) $(ARGS)
 
 vmlinux.h:
 	# This is going to dump both vmlinux and fuse BTFs

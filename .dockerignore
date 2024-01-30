@@ -1,9 +1,12 @@
 *
 
-!bpf.c
-!bpf.go
+!bpf/
+!fuse/*
+!kallsyms/*
+!vfs/*
+!virtio/*
 !go.mod
 !go.sum
 !main.go
+!kallsyms.go
 !opcodes.go
-!vmlinux.h

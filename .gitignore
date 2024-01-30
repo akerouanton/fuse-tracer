@@ -1,2 +1,2 @@
-build/fuse_tracer
-fuse_tracer_bpfel_x86.o
+bpf/fuse_tracer_bpfel_arm64.o
+bpf/fuse_tracer_bpfel_x86.o

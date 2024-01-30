@@ -10,9 +10,12 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/akerouanton/fuse-tracer/bpf"
+	"github.com/akerouanton/fuse-tracer/kallsyms"
 	"github.com/aybabtme/uniplot/histogram"
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
@@ -22,16 +25,18 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+var traceFlag = flag.String("trace", "reqresp", "Trace Either: req, resp, reqresp")
 var dumpFlag = flag.Bool("dump", false, "Dump requests / replies")
 var hexFlag = flag.Bool("hex", false, "Show args in hex format")
 var statsFlag = flag.Bool("stats", false, "Show requests / replies stats")
 var histFlag = flag.Bool("hist", false, "Show histogram of request time")
-var stacktraceFlag = flag.Bool("stacktrace", false, "Dump kernel stacktraces")
+var stackFlag = flag.Bool("stack", false, "Dump kernel stacktraces")
 var connStateFlag = flag.Bool("conn-state", false, "Show fuse conn state")
 
 type fuseOpStats struct {
-	Count     int
-	TotalTime uint64
+	Count       int
+	TotalTime   uint64
+	NoStartTime int
 }
 
 var fuseOpsStats map[uint32]fuseOpStats
@@ -39,17 +44,15 @@ var fuseOpsHistData []float64
 
 var progNames = []string{
 	"trace_fuse_request",
+	"trace_fuse_request_end",
 	"trace_request_wait_answer",
 }
 
 func main() {
 	flag.Parse()
 
-	if !*dumpFlag && (*hexFlag || *stacktraceFlag) {
-		panic("You need to specify -dump")
-	}
-	if !*dumpFlag && !*statsFlag && !*histFlag {
-		panic("You need to specify either -dump, -stats or -hist")
+	if !*dumpFlag && !*statsFlag && !*histFlag && !*stackFlag {
+		panic("You need to specify either -dump, -stats, -hist or -stack")
 	}
 
 	logrus.SetLevel(logrus.DebugLevel)
@@ -65,10 +68,23 @@ func main() {
 	fuseOpsStats = make(map[uint32]fuseOpStats)
 	fuseOpsHistData = []float64{}
 
-	reader := bytes.NewReader(_Fuse_tracerBytes)
-	collSpec, err := ebpf.LoadCollectionSpecFromReader(reader)
+	collSpec, err := bpf.LoadFuse_tracer()
 	if err != nil {
 		panic(fmt.Errorf("could not load collection spec: %w", err))
+	}
+
+	traceType := uint8(0)
+	if *traceFlag == "req" {
+		traceType = 1
+	} else if *traceFlag == "resp" {
+		traceType = 2
+	} else {
+		traceType = 3
+	}
+	if err := collSpec.RewriteConstants(map[string]interface{}{
+		"trace_type": traceType,
+	}); err != nil {
+		panic(err)
 	}
 
 	// Load eBPF programs and maps into the kernel.
@@ -92,19 +108,24 @@ func main() {
 		attached[progName] = l
 	}
 
+	// Retrieve kallsyms *after* attaching the probe to have it included
+	if *stackFlag {
+		kallsyms.LoadKallsyms("/proc/kallsyms")
+	}
+
 	fuseEventsReader, err := ringbuf.NewReader(coll.Maps["fuse_req_events"])
 	if err != nil {
 		panic(err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	go WatchFuseEvents(ctx, fuseEventsReader)
+	go WatchFuseEvents(ctx, fuseEventsReader, coll.Maps["stacktraces"])
 
 	<-c
 	cancel()
 
 	if *statsFlag {
-		printOpsStats()
+		printOpsStats(coll.Maps["inflight_reqs"])
 	}
 	if *histFlag {
 		printOpsHist()
@@ -118,19 +139,52 @@ func main() {
 	}
 }
 
-func printOpsStats() {
+func printOpsStats(inflightMap *ebpf.Map) {
 	fmt.Print("\nStats:\n")
 
 	totalCount := 0
 	totalTime := 0
+	totalNoStartTime := 0
 
-	for opcode, stat := range fuseOpsStats {
-		fmt.Printf("    - %s: %d calls (total time: %.3fµs)\n", fuseOperation(opcode), stat.Count, float64(stat.TotalTime)/1e3)
-		totalCount += stat.Count
-		totalTime += int(stat.TotalTime)
+	opcodes := make([]uint32, 0, len(fuseOpsStats))
+	for opcode := range fuseOpsStats {
+		opcodes = append(opcodes, opcode)
 	}
 
-	fmt.Printf("    - Total: %d calls (total time: %.3fµs)\n", totalCount, float64(totalTime)/1e3)
+	slices.Sort(opcodes)
+
+	for _, opcode := range opcodes {
+		stat := fuseOpsStats[opcode]
+
+		fmt.Printf("    - %s: %d calls (total time: %.3fµs -- %d missing start times)\n",
+			fuseOperation(opcode),
+			stat.Count,
+			float64(stat.TotalTime)/1e3,
+			stat.NoStartTime)
+
+		totalCount += stat.Count
+		totalTime += int(stat.TotalTime)
+		totalNoStartTime += stat.NoStartTime
+	}
+
+	fmt.Printf("    - Total: %d calls (total time: %.3fµs -- %d missing start times)\n",
+		totalCount,
+		float64(totalTime)/1e3,
+		totalNoStartTime)
+	fmt.Printf("    - Inflight requests: %d\n", countInflightReqs(inflightMap))
+}
+
+func countInflightReqs(inflightMap *ebpf.Map) int {
+	inflightCount := 0
+	inflightIter := inflightMap.Iterate()
+
+	var k uint32
+	var v interface{}
+	for inflightIter.Next(&k, &v) {
+		inflightCount++
+	}
+
+	return inflightCount
 }
 
 func printOpsHist() {
@@ -144,7 +198,7 @@ func printOpsHist() {
 	}
 }
 
-func WatchFuseEvents(ctx context.Context, fuseEventsReader *ringbuf.Reader) error {
+func WatchFuseEvents(ctx context.Context, fuseEventsReader *ringbuf.Reader, stackReader *ebpf.Map) error {
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -158,14 +212,20 @@ func WatchFuseEvents(ctx context.Context, fuseEventsReader *ringbuf.Reader) erro
 			continue
 		}
 
-		var fuseEvt fuse_tracerFuseReqEvt
+		var fuseEvt bpf.Fuse_tracerFuseReqEvt
 		if err := binary.Read(bytes.NewBuffer(record.RawSample), binary.LittleEndian, &fuseEvt); err != nil {
 			logrus.WithField("error", err).Error("could not parse fuse_req_evt")
 			continue
 		}
 
+		if *dumpFlag || *stackFlag {
+			printFuseEventHeader(fuseEvt)
+		}
 		if *dumpFlag {
-			fmt.Printf("%s\n", fuseEvent(fuseEvt))
+			printFuseEvent(fuseEvt)
+		}
+		if *stackFlag {
+			printStackTrace(stackReader, fuseEvt.StackId)
 		}
 
 		opStat, ok := fuseOpsStats[fuseEvt.InH.Opcode]
@@ -174,24 +234,36 @@ func WatchFuseEvents(ctx context.Context, fuseEventsReader *ringbuf.Reader) erro
 		}
 
 		opStat.Count++
-		opStat.TotalTime += fuseEvt.EndKtime - fuseEvt.StartKtime
-		fuseOpsStats[fuseEvt.InH.Opcode] = opStat
-		fuseOpsHistData = append(fuseOpsHistData, float64(opStat.TotalTime))
+
+		if fuseEvt.StartKtime > 0 {
+			opStat.TotalTime += fuseEvt.EndKtime - fuseEvt.StartKtime
+			fuseOpsStats[fuseEvt.InH.Opcode] = opStat
+			fuseOpsHistData = append(fuseOpsHistData, float64(opStat.TotalTime))
+		} else {
+			opStat.NoStartTime++
+		}
 	}
 }
 
-func fuseEvent(fuseEvt fuse_tracerFuseReqEvt) string {
-	b := &strings.Builder{}
-
-	fmt.Fprintf(b, "[%d] %s (Len: %d - Request ID: %d - UID: %d - GID: %d - PID: %d): took %.3fµs\n",
+func printFuseEventHeader(fuseEvt bpf.Fuse_tracerFuseReqEvt) {
+	fmt.Printf("[%d] %s (Len: %d - Request ID: %d - UID: %d - GID: %d - PID: %d): ",
 		fuseEvt.StartKtime,
 		fuseOperation(fuseEvt.InH.Opcode),
 		fuseEvt.InH.Len,
 		fuseEvt.InH.Unique,
 		fuseEvt.InH.Uid,
 		fuseEvt.InH.Gid,
-		fuseEvt.InH.Pid,
-		float64(fuseEvt.EndKtime-fuseEvt.StartKtime)/1e3)
+		fuseEvt.InH.Pid)
+
+	if fuseEvt.StartKtime > 0 {
+		fmt.Printf("took %.3fµs", float64(fuseEvt.EndKtime-fuseEvt.StartKtime)/1e3)
+	}
+
+	fmt.Println()
+}
+
+func printFuseEvent(fuseEvt bpf.Fuse_tracerFuseReqEvt) {
+	b := &strings.Builder{}
 
 	if fuseEvt.InNumargs == 0 {
 		fmt.Fprint(b, "    - (no in args)\n")
@@ -219,12 +291,12 @@ func fuseEvent(fuseEvt fuse_tracerFuseReqEvt) string {
 		}
 	}
 
-	return b.String()
+	fmt.Printf("%s\n", b.String())
 }
 
 func printConnStateFlag(m *ebpf.Map) {
 	var mapID uint32
-	var connState fuse_tracerFuseConnState
+	var connState bpf.Fuse_tracerFuseConnState
 
 	if err := m.Lookup(&mapID, &connState); err != nil {
 		panic(err)
@@ -234,4 +306,24 @@ func printConnStateFlag(m *ebpf.Map) {
 	for _, field := range structs.New(connState).Fields() {
 		fmt.Printf("    - %s: %d\n", field.Name(), field.Value())
 	}
+}
+
+func printStackTrace(stackReader *ebpf.Map, stackId uint32) {
+	stack := make([]uint64, 127)
+	if err := stackReader.Lookup(stackId, &stack); err != nil {
+		fmt.Printf("Stack trace: (unavailable)\n\n")
+		return
+	}
+
+	b := &strings.Builder{}
+	for _, fnAddr := range stack {
+		if fnAddr == 0 {
+			break
+		}
+
+		fnName, _ := kallsyms.SearchKsym(fnAddr)
+		fmt.Fprintf(b, "    %s [%x]\n", fnName, fnAddr)
+	}
+
+	fmt.Printf("Stack trace:\n%s\n", b.String())
 }
